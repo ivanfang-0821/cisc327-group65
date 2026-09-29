@@ -1,2 +1,2 @@
-# cisc327-group65
-assignment 1 for CISC 327
+   # CISC 327 Group Project: Equipment Rental Management
+   Members: Ivan Fang, Spencer McAuslan
