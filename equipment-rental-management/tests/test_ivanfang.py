@@ -96,3 +96,67 @@ def test_create_equipment_missing_category_is_rejected(client):
     """
     response = client.post("/equipment", json={"name": "Tent"})
     assert response.status_code == 400
+
+
+# ------------------------------------------------------------
+# Features 4-5: update and delete equipment
+# ------------------------------------------------------------
+
+
+def test_update_equipment_persists_changes_and_keeps_other_fields(client):
+    """Fields sent in a PUT are saved; fields left out keep their old values."""
+    item = create_equipment(client, name="Kayak", category="Water", total_units=3)
+
+    response = client.put(f"/equipment/{item['id']}", json={
+        "name": "Sea Kayak", "total_units": 5,
+    })
+    assert response.status_code == 200
+
+    fetched = client.get(f"/equipment/{item['id']}").get_json()
+    assert fetched["name"] == "Sea Kayak"
+    assert fetched["total_units"] == 5
+    assert fetched["category"] == "Water"
+    assert fetched["available_units"] == 3
+
+
+def test_update_nonexistent_equipment_returns_404(client):
+    """Updating an ID that does not exist fails and creates nothing."""
+    response = client.put("/equipment/999", json={"name": "Ghost"})
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "Equipment not found"}
+    assert client.get("/equipment").get_json() == []
+
+
+def test_update_cannot_make_available_units_exceed_total(client):
+    """DEFECT (R1): the shop cannot have more units on the shelf than it owns.
+
+    Observed: setting available_units to 10 on an item with 2 total units is
+    accepted, so the stock list reports 10 of 2 available.
+    """
+    item = create_equipment(client, total_units=2)
+    response = client.put(f"/equipment/{item['id']}", json={"available_units": 10})
+    assert response.status_code == 400
+    assert client.get(f"/equipment/{item['id']}").get_json()["available_units"] == 2
+
+
+def test_delete_equipment_removes_it_everywhere(client):
+    """After a delete, the item is gone from lookup, availability and the list."""
+    kept = create_equipment(client, name="Canoe")
+    deleted = create_equipment(client, name="Paddle")
+
+    response = client.delete(f"/equipment/{deleted['id']}")
+    assert response.status_code == 204
+
+    assert client.get(f"/equipment/{deleted['id']}").status_code == 404
+    assert client.get(f"/equipment/{deleted['id']}/availability").status_code == 404
+    assert [item["id"] for item in client.get("/equipment").get_json()] == [kept["id"]]
+
+
+def test_delete_equipment_twice_returns_404(client):
+    """Deleting an item that was already deleted reports it as not found."""
+    item = create_equipment(client)
+    assert client.delete(f"/equipment/{item['id']}").status_code == 204
+
+    response = client.delete(f"/equipment/{item['id']}")
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "Equipment not found"}
