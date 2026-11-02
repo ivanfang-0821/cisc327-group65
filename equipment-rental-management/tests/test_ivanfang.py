@@ -25,6 +25,12 @@ def create_equipment(client, **overrides):
     return response.get_json()
 
 
+def create_renter(client, name="Sam", email="sam@example.com"):
+    response = client.post("/renters", json={"name": name, "email": email})
+    assert response.status_code == 201
+    return response.get_json()
+
+
 # ------------------------------------------------------------
 # Features 1-3: add, list, and view equipment
 # ------------------------------------------------------------
@@ -160,3 +166,76 @@ def test_delete_equipment_twice_returns_404(client):
     response = client.delete(f"/equipment/{item['id']}")
     assert response.status_code == 404
     assert response.get_json() == {"error": "Equipment not found"}
+
+
+# ------------------------------------------------------------
+# Features 6-7: mark in/out of service and check availability
+# ------------------------------------------------------------
+
+
+def test_mark_out_of_service_shows_in_item_and_availability(client):
+    """Taking an item out of service is visible everywhere; unit counts don't change."""
+    item = create_equipment(client, total_units=2)
+
+    response = client.patch(f"/equipment/{item['id']}/status", json={"is_available": False})
+    assert response.status_code == 200
+    assert response.get_json()["is_available"] is False
+
+    assert client.get(f"/equipment/{item['id']}").get_json()["is_available"] is False
+    availability = client.get(f"/equipment/{item['id']}/availability").get_json()
+    assert availability == {
+        "equipment_id": item["id"],
+        "is_available": False,
+        "available_units": 2,
+        "total_units": 2,
+    }
+
+
+def test_out_of_service_item_can_be_put_back_in_service(client):
+    """An item marked out of service can be marked available again."""
+    item = create_equipment(client)
+    client.patch(f"/equipment/{item['id']}/status", json={"is_available": False})
+
+    response = client.patch(f"/equipment/{item['id']}/status", json={"is_available": True})
+    assert response.status_code == 200
+    assert client.get(f"/equipment/{item['id']}/availability").get_json()["is_available"] is True
+
+
+def test_status_and_availability_of_nonexistent_equipment_return_404(client):
+    """Both service-status endpoints report unknown IDs as not found."""
+    status_response = client.patch("/equipment/999/status", json={"is_available": False})
+    assert status_response.status_code == 404
+    assert status_response.get_json() == {"error": "Equipment not found"}
+
+    availability_response = client.get("/equipment/999/availability")
+    assert availability_response.status_code == 404
+    assert availability_response.get_json() == {"error": "Equipment not found"}
+
+
+def test_availability_tracks_checkouts_and_returns(client):
+    """Workflow: check out 2 of 3 units, then return one; availability follows each step."""
+    item = create_equipment(client, total_units=3)
+    renter = create_renter(client)
+
+    rental_ids = []
+    for _ in range(2):
+        response = client.post("/rentals", json={"equipment_id": item["id"], "renter_id": renter["id"]})
+        rental_ids.append(response.get_json()["id"])
+    assert client.get(f"/equipment/{item['id']}/availability").get_json()["available_units"] == 1
+
+    client.put(f"/rentals/{rental_ids[0]}/return")
+    availability = client.get(f"/equipment/{item['id']}/availability").get_json()
+    assert availability["available_units"] == 2
+    assert availability["total_units"] == 3
+
+
+def test_status_rejects_values_other_than_true_or_false(client):
+    """DEFECT (R10): a damaged/out-of-service tag must be a clear yes/no value.
+
+    Observed: sending "damaged" is accepted and stored as the string "damaged",
+    so the item's is_available field is no longer true or false.
+    """
+    item = create_equipment(client)
+    response = client.patch(f"/equipment/{item['id']}/status", json={"is_available": "damaged"})
+    assert response.status_code == 400
+    assert client.get(f"/equipment/{item['id']}").get_json()["is_available"] is True
