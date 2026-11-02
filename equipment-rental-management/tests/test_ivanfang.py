@@ -16,6 +16,10 @@
 # behaviour.
 # ============================================================
 
+from datetime import date, timedelta
+
+from app.models.rental import RENTAL_PERIOD_DAYS
+
 
 def create_equipment(client, **overrides):
     payload = {"name": "Kayak", "category": "Water", "total_units": 3}
@@ -239,3 +243,94 @@ def test_status_rejects_values_other_than_true_or_false(client):
     response = client.patch(f"/equipment/{item['id']}/status", json={"is_available": "damaged"})
     assert response.status_code == 400
     assert client.get(f"/equipment/{item['id']}").get_json()["is_available"] is True
+
+
+# ------------------------------------------------------------
+# Feature 13: check out equipment
+# ------------------------------------------------------------
+
+
+def test_checkout_records_rental_and_lowers_stock_by_one(client):
+    """A checkout links renter and item, sets today's dates, and reduces stock by one."""
+    item = create_equipment(client, total_units=3)
+    renter = create_renter(client)
+
+    response = client.post("/rentals", json={"equipment_id": item["id"], "renter_id": renter["id"]})
+    assert response.status_code == 201
+    rental = response.get_json()
+    assert rental["equipment_id"] == item["id"]
+    assert rental["renter_id"] == renter["id"]
+    assert rental["rental_date"] == date.today().isoformat()
+    assert rental["due_date"] == (date.today() + timedelta(days=RENTAL_PERIOD_DAYS)).isoformat()
+    assert rental["return_date"] is None
+    assert rental["deposit_amount"] == 0.0
+
+    assert client.get(f"/equipment/{item['id']}").get_json()["available_units"] == 2
+    assert client.get(f"/rentals?equipment_id={item['id']}").get_json() == [rental]
+
+
+def test_checkout_records_deposit_amount(client):
+    """A deposit given at checkout is stored on the rental and not yet released."""
+    item = create_equipment(client)
+    renter = create_renter(client)
+
+    rental = client.post("/rentals", json={
+        "equipment_id": item["id"], "renter_id": renter["id"], "deposit_amount": 25.0,
+    }).get_json()
+    assert rental["deposit_amount"] == 25.0
+    assert rental["deposit_released"] is False
+
+
+def test_checkout_of_nonexistent_equipment_returns_404_and_creates_no_rental(client):
+    """Renting an unknown item fails without leaving a rental behind."""
+    renter = create_renter(client)
+
+    response = client.post("/rentals", json={"equipment_id": 999, "renter_id": renter["id"]})
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "Equipment not found"}
+    assert client.get("/rentals").get_json() == []
+
+
+def test_checkout_is_refused_when_no_units_are_left(client):
+    """DEFECT (R17): gear with no units left is not available and cannot be rented.
+
+    Observed: the second checkout of a 1-unit item succeeds (201) and
+    available_units drops to -1.
+    """
+    item = create_equipment(client, total_units=1)
+    renter = create_renter(client)
+    client.post("/rentals", json={"equipment_id": item["id"], "renter_id": renter["id"]})
+
+    response = client.post("/rentals", json={"equipment_id": item["id"], "renter_id": renter["id"]})
+    assert response.status_code == 400
+    assert client.get(f"/equipment/{item['id']}").get_json()["available_units"] == 0
+    assert len(client.get("/rentals").get_json()) == 1
+
+
+def test_checkout_is_refused_for_out_of_service_equipment(client):
+    """DEFECT (R17): an item marked out of service cannot be rented.
+
+    Observed: checkout succeeds (201) even though is_available is false.
+    """
+    item = create_equipment(client, total_units=2)
+    renter = create_renter(client)
+    client.patch(f"/equipment/{item['id']}/status", json={"is_available": False})
+
+    response = client.post("/rentals", json={"equipment_id": item["id"], "renter_id": renter["id"]})
+    assert response.status_code == 400
+    assert client.get(f"/equipment/{item['id']}").get_json()["available_units"] == 2
+    assert client.get("/rentals").get_json() == []
+
+
+def test_checkout_is_refused_for_nonexistent_renter(client):
+    """DEFECT (R9): rental history must show who has the gear, so the renter must exist.
+
+    Observed: checkout succeeds (201) for renter_id 999, which was never
+    created, so the rental points to nobody.
+    """
+    item = create_equipment(client)
+
+    response = client.post("/rentals", json={"equipment_id": item["id"], "renter_id": 999})
+    assert response.status_code == 404
+    assert client.get("/rentals").get_json() == []
+    assert client.get(f"/equipment/{item['id']}").get_json()["available_units"] == 1
