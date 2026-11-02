@@ -1,0 +1,98 @@
+# ============================================================
+# Ivan Fang: tests for equipment and checkout features
+# ============================================================
+# Table B features covered in this file:
+#   1. List all equipment            GET    /equipment
+#   2. Add equipment                 POST   /equipment
+#   3. View one equipment item       GET    /equipment/<id>
+#   4. Update equipment              PUT    /equipment/<id>
+#   5. Delete equipment              DELETE /equipment/<id>
+#   6. Mark equipment in/out of service  PATCH /equipment/<id>/status
+#   7. Check one item's availability GET    /equipment/<id>/availability
+#  13. Check out equipment           POST   /rentals
+#
+# Tests marked "DEFECT" are expected to fail against the reference app.
+# Each one states the requirement (Table A ID) that supports the expected
+# behaviour.
+# ============================================================
+
+
+def create_equipment(client, **overrides):
+    payload = {"name": "Kayak", "category": "Water", "total_units": 3}
+    payload.update(overrides)
+    response = client.post("/equipment", json=payload)
+    assert response.status_code == 201
+    return response.get_json()
+
+
+# ------------------------------------------------------------
+# Features 1-3: add, list, and view equipment
+# ------------------------------------------------------------
+
+
+def test_create_equipment_returns_fields_and_persists(client):
+    """A new item starts fully available, and a later GET returns the same data."""
+    response = client.post("/equipment", json={
+        "name": "Mountain Bike", "category": "Cycling", "total_units": 4,
+    })
+    assert response.status_code == 201
+    item = response.get_json()
+    assert item["name"] == "Mountain Bike"
+    assert item["category"] == "Cycling"
+    assert item["total_units"] == 4
+    assert item["available_units"] == 4
+    assert item["is_available"] is True
+
+    fetched = client.get(f"/equipment/{item['id']}")
+    assert fetched.status_code == 200
+    assert fetched.get_json() == item
+
+
+def test_create_equipment_defaults_to_one_unit(client):
+    """Leaving out total_units creates a single unit that is available."""
+    response = client.post("/equipment", json={"name": "Helmet", "category": "Safety"})
+    assert response.status_code == 201
+    item = response.get_json()
+    assert item["total_units"] == 1
+    assert item["available_units"] == 1
+
+
+def test_list_equipment_returns_every_item_with_unique_ids(client):
+    """The list holds every created item, in creation order, each with its own ID."""
+    names = ["Kayak", "Canoe", "Paddle"]
+    for name in names:
+        create_equipment(client, name=name)
+
+    listed = client.get("/equipment").get_json()
+    assert [item["name"] for item in listed] == names
+    assert len({item["id"] for item in listed}) == len(names)
+
+
+def test_get_nonexistent_equipment_returns_404(client):
+    """Looking up an ID that was never created gives a clear 'not found' error."""
+    create_equipment(client)
+    response = client.get("/equipment/999")
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "Equipment not found"}
+
+
+def test_create_equipment_with_negative_units_is_rejected(client):
+    """DEFECT (R1): stock counts must be meaningful, so a negative total is refused.
+
+    Observed: the item is created with total_units = -2 and available_units = -2.
+    """
+    response = client.post("/equipment", json={
+        "name": "Tent", "category": "Camping", "total_units": -2,
+    })
+    assert response.status_code == 400
+    assert client.get("/equipment").get_json() == []
+
+
+def test_create_equipment_missing_category_is_rejected(client):
+    """DEFECT (R1): a request missing a required field gets a 400 error, not a crash.
+
+    Observed: the route reads data["category"] directly and raises KeyError,
+    which the running app reports as a 500 Internal Server Error.
+    """
+    response = client.post("/equipment", json={"name": "Tent"})
+    assert response.status_code == 400
