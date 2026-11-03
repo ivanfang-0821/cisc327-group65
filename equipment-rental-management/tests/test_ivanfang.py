@@ -10,6 +10,7 @@
 #   6. Mark equipment in/out of service  PATCH /equipment/<id>/status
 #   7. Check one item's availability GET    /equipment/<id>/availability
 #  13. Check out equipment           POST   /rentals
+# Plus tests for my Step 3 enhancement (R17) at the end of the file.
 #
 # Tests marked "DEFECT" are expected to fail against the reference app.
 # Each one states the requirement (Table A ID) that supports the expected
@@ -292,10 +293,10 @@ def test_checkout_of_nonexistent_equipment_returns_404_and_creates_no_rental(cli
 
 
 def test_checkout_is_refused_when_no_units_are_left(client):
-    """DEFECT (R17): gear with no units left is not available and cannot be rented.
+    """R17: gear with no units left is not available and cannot be rented.
 
-    Observed: the second checkout of a 1-unit item succeeds (201) and
-    available_units drops to -1.
+    Was a defect in the reference app (second checkout of a 1-unit item gave
+    201 and available_units -1); fixed by the R17 enhancement.
     """
     item = create_equipment(client, total_units=1)
     renter = create_renter(client)
@@ -308,9 +309,10 @@ def test_checkout_is_refused_when_no_units_are_left(client):
 
 
 def test_checkout_is_refused_for_out_of_service_equipment(client):
-    """DEFECT (R17): an item marked out of service cannot be rented.
+    """R17: an item marked out of service cannot be rented.
 
-    Observed: checkout succeeds (201) even though is_available is false.
+    Was a defect in the reference app (checkout gave 201 even though
+    is_available was false); fixed by the R17 enhancement.
     """
     item = create_equipment(client, total_units=2)
     renter = create_renter(client)
@@ -334,3 +336,69 @@ def test_checkout_is_refused_for_nonexistent_renter(client):
     assert response.status_code == 404
     assert client.get("/rentals").get_json() == []
     assert client.get(f"/equipment/{item['id']}").get_json()["available_units"] == 1
+
+
+# ------------------------------------------------------------
+# Enhancement (R17): only available gear can be checked out
+# ------------------------------------------------------------
+
+
+def test_refused_checkout_explains_why(client):
+    """Each kind of refusal returns its own error message, so staff know what to fix."""
+    renter = create_renter(client)
+    out_of_service = create_equipment(client, name="Canoe")
+    client.patch(f"/equipment/{out_of_service['id']}/status", json={"is_available": False})
+    none_left = create_equipment(client, name="Helmet", total_units=1)
+    client.post("/rentals", json={"equipment_id": none_left["id"], "renter_id": renter["id"]})
+
+    response = client.post("/rentals", json={"equipment_id": out_of_service["id"], "renter_id": renter["id"]})
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Equipment is out of service"}
+
+    response = client.post("/rentals", json={"equipment_id": none_left["id"], "renter_id": renter["id"]})
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "No units available"}
+
+
+def test_returned_unit_can_be_rented_again(client):
+    """Workflow: rent the only unit, get refused, return it, then rent it again."""
+    item = create_equipment(client, total_units=1)
+    renter = create_renter(client)
+    first = client.post("/rentals", json={"equipment_id": item["id"], "renter_id": renter["id"]}).get_json()
+    assert client.post("/rentals", json={"equipment_id": item["id"], "renter_id": renter["id"]}).status_code == 400
+
+    client.put(f"/rentals/{first['id']}/return")
+    response = client.post("/rentals", json={"equipment_id": item["id"], "renter_id": renter["id"]})
+    assert response.status_code == 201
+    assert client.get(f"/equipment/{item['id']}").get_json()["available_units"] == 0
+    assert len(client.get(f"/rentals?equipment_id={item['id']}").get_json()) == 2
+
+
+def test_item_put_back_in_service_can_be_rented(client):
+    """Workflow: an out-of-service item is refused, then rentable once marked available."""
+    item = create_equipment(client, total_units=2)
+    renter = create_renter(client)
+    client.patch(f"/equipment/{item['id']}/status", json={"is_available": False})
+    assert client.post("/rentals", json={"equipment_id": item["id"], "renter_id": renter["id"]}).status_code == 400
+
+    client.patch(f"/equipment/{item['id']}/status", json={"is_available": True})
+    response = client.post("/rentals", json={"equipment_id": item["id"], "renter_id": renter["id"]})
+    assert response.status_code == 201
+    assert client.get(f"/equipment/{item['id']}/availability").get_json()["available_units"] == 1
+
+
+def test_web_form_does_not_check_out_unavailable_gear(client):
+    """The Rentals page follows the same rule: no rental for out-of-service or used-up gear."""
+    renter = create_renter(client)
+    out_of_service = create_equipment(client, name="Canoe")
+    client.patch(f"/equipment/{out_of_service['id']}/status", json={"is_available": False})
+    none_left = create_equipment(client, name="Helmet", total_units=1)
+    client.post("/rentals", json={"equipment_id": none_left["id"], "renter_id": renter["id"]})
+
+    for item in (out_of_service, none_left):
+        response = client.post("/ui/rentals", data={"equipment_id": item["id"], "renter_id": renter["id"]})
+        assert response.status_code == 302
+
+    assert len(client.get("/rentals").get_json()) == 1
+    assert client.get(f"/equipment/{out_of_service['id']}").get_json()["available_units"] == out_of_service["total_units"]
+    assert client.get(f"/equipment/{none_left['id']}").get_json()["available_units"] == 0
