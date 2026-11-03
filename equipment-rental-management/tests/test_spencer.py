@@ -201,13 +201,17 @@ def test_release_deposit(client):
     rental_res = client.post("/rentals", json={
         "equipment_id": eq_id, 
         "renter_id": renter_id, 
-        "deposit": 50.0
+        "deposit_amount": 50.0
     })
     rental_id = rental_res.get_json()["id"]
 
-    deposit_res = client.put(f"/rentals/{rental_id}/deposit/release")
-    assert deposit_res.status_code in [200, 204]
+    
     verify_res = client.get(f"/rentals?renter_id={renter_id}")
     assert verify_res.status_code == 200
+
+    deposit_res = client.put(f"/rentals/{rental_id}/deposit/release")
+    assert deposit_res.status_code in [200, 204]
+
     rentals = verify_res.get_json()
     assert len(rentals) >= 1
+    assert rentals[0]["deposit_released"] is True
