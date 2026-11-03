@@ -47,14 +47,28 @@ app working without a REST client, and calls the same in-memory store.
 | GET | `/equipment/<id>` | Get one equipment item |
 | PUT | `/equipment/<id>` | Update an equipment item |
 | DELETE | `/equipment/<id>` | Delete an equipment item |
+| PATCH | `/equipment/<id>/status` | Mark an item in or out of service (`is_available`) |
+| GET | `/equipment/<id>/availability` | Get an item's service status and unit counts |
 | GET | `/renters` | List all renters |
 | POST | `/renters` | Create a renter |
 | GET | `/renters/<id>` | Get one renter |
 | PUT | `/renters/<id>` | Update a renter |
 | DELETE | `/renters/<id>` | Delete a renter |
-| POST | `/rentals` | Check out equipment (`equipment_id`, `renter_id`) |
+| POST | `/rentals` | Check out equipment (`equipment_id`, `renter_id`); refused if the item is out of service or has no units left (see below) |
 | PUT | `/rentals/<id>/return` | Return rented equipment |
 | GET | `/rentals?renter_id=&equipment_id=` | Look up rentals |
+
+### Checkout rules
+
+Equipment can only be checked out while it is available. `POST /rentals`
+returns `400` and creates no rental when:
+
+| Situation | Response |
+|---|---|
+| The item is out of service (`is_available` is `false`) | `{"error": "Equipment is out of service"}` |
+| The item has no units left (`available_units` is 0) | `{"error": "No units available"}` |
+
+The Rentals page in the web UI follows the same rules.
 
 ## Tests
 
