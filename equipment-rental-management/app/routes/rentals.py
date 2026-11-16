@@ -99,7 +99,7 @@ def release_deposit(rental_id):
     return jsonify({"rental_id": rental_id, "deposit_released": True})
 
 
-@rentals_bp.route('/rentals/<int:rental_id>/reminder', methods=['POST'])
+@rentals_bp.route("/<int:rental_id>/reminder", methods=["POST"])
 def send_rental_reminder(rental_id):
 
     rental = store.rentals.get(rental_id)
@@ -114,10 +114,15 @@ def send_rental_reminder(rental_id):
     if date.today() < target_reminder_date:
         return jsonify({"error": "Too early for reminder. Reminders can only be sent 2 days before the due date."}), 400
 
+    renter = store.renters.get(rental.renter_id)
+    item = store.equipment.get(rental.equipment_id)
+    if renter is None or item is None:
+        return jsonify({"error": "Renter or equipment not found"}), 404
+
     success = send_notification(
-        recipient=rental.renter.email,
-        subject="Equipment Return Reminder",
-        message=f"Reminder: Your rental for {rental.equipment.name} is due back soon."
+        recipient = renter.email,
+        subject = "Equipment Return Reminder",
+        message = f"Reminder: Your rental for {item.name} is due back soon.",
     )
     
     return jsonify({

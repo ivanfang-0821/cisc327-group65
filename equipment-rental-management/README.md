@@ -57,7 +57,7 @@ app working without a REST client, and calls the same in-memory store.
 | POST | `/rentals` | Check out equipment (`equipment_id`, `renter_id`); refused if the item is out of service or has no units left (see below) |
 | PUT | `/rentals/<id>/return` | Return rented equipment |
 | GET | `/rentals?renter_id=&equipment_id=` | Look up rentals |
-| POST | /rentals/<int:rental_id>/reminder | Send an equipment return reminder |
+| POST | `/rentals/<id>/reminder` | Send an equipment return reminder |
 
 ### Checkout rules
 
