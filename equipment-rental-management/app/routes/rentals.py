@@ -5,6 +5,8 @@ from flask import Blueprint, jsonify, request
 from app import store
 from app.models.rental import Rental
 
+from notification_service import send_notification
+
 rentals_bp = Blueprint("rentals", __name__, url_prefix="/rentals")
 
 
@@ -95,3 +97,30 @@ def release_deposit(rental_id):
 
     # BUG: rental.deposit_released is never set to True here — state is not persisted.
     return jsonify({"rental_id": rental_id, "deposit_released": True})
+
+
+@rentals_bp.route('/rentals/<int:rental_id>/reminder', methods=['POST'])
+def send_rental_reminder(rental_id):
+
+    rental = store.rentals.get(rental_id)
+    if rental is None:
+        return jsonify({"error": "Rental not found"}), 404
+    
+    if rental.return_date is not None:
+        return jsonify({"error": "Rental already returned"}), 400
+
+    target_reminder_date = rental.due_date - timedelta(days=2)
+    
+    if date.today() < target_reminder_date:
+        return jsonify({"error": "Too early for reminder. Reminders can only be sent 2 days before the due date."}), 400
+
+    success = send_notification(
+        recipient=rental.renter.email,
+        subject="Equipment Return Reminder",
+        message=f"Reminder: Your rental for {rental.equipment.name} is due back soon."
+    )
+    
+    return jsonify({
+        "message": "Reminder processed",
+        "notified": success
+    }), 200
