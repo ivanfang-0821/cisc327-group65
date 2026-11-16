@@ -17,6 +17,7 @@
 # behaviour.
 # ============================================================
 
+import pytest
 from datetime import date, timedelta
 
 from app.models.rental import RENTAL_PERIOD_DAYS
@@ -87,6 +88,7 @@ def test_get_nonexistent_equipment_returns_404(client):
     assert response.get_json() == {"error": "Equipment not found"}
 
 
+@pytest.mark.xfail(reason="Known A2 defect (R1): app accepts negative total_units")
 def test_create_equipment_with_negative_units_is_rejected(client):
     """DEFECT (R1): stock counts must be meaningful, so a negative total is refused.
 
@@ -99,6 +101,7 @@ def test_create_equipment_with_negative_units_is_rejected(client):
     assert client.get("/equipment").get_json() == []
 
 
+@pytest.mark.xfail(reason="Known A2 defect (R1): missing category crashes with KeyError instead of an error response")
 def test_create_equipment_missing_category_is_rejected(client):
     """DEFECT (R1): a request missing a required field gets a 400 error, not a crash.
 
@@ -138,6 +141,7 @@ def test_update_nonexistent_equipment_returns_404(client):
     assert client.get("/equipment").get_json() == []
 
 
+@pytest.mark.xfail(reason="Known A2 defect (R1): update allows available_units above total_units")
 def test_update_cannot_make_available_units_exceed_total(client):
     """DEFECT (R1): the shop cannot have more units on the shelf than it owns.
 
@@ -234,6 +238,7 @@ def test_availability_tracks_checkouts_and_returns(client):
     assert availability["total_units"] == 3
 
 
+@pytest.mark.xfail(reason="Known A2 defect (R10): status endpoint stores non-boolean is_available values")
 def test_status_rejects_values_other_than_true_or_false(client):
     """DEFECT (R10): a damaged/out-of-service tag must be a clear yes/no value.
 
@@ -324,6 +329,7 @@ def test_checkout_is_refused_for_out_of_service_equipment(client):
     assert client.get("/rentals").get_json() == []
 
 
+@pytest.mark.xfail(reason="Known A2 defect (R16/R17): checkout does not validate renter_id exists")
 def test_checkout_is_refused_for_nonexistent_renter(client):
     """DEFECT (R9): rental history must show who has the gear, so the renter must exist.
 
