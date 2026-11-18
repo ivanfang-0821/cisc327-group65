@@ -1,16 +1,21 @@
 # ============================================================
 # Ivan Fang: Assignment 3 tests
 # ============================================================
-# Coverage-directed tests for app/routes/views.py (the web UI pages).
+# Part 1: coverage-directed tests for app/routes/views.py (the web UI pages).
 # Baseline coverage of views.py was 47%: home, equipment_page,
 # delete_equipment_page, renters_page, delete_renter_page, rentals_page
 # and return_rental_page were largely untested.
 #
+# Part 2 (bottom of file): notification tests for the failure and non-trigger
+# paths of POST /rentals/<id>/reminder, using a stub and mocks.
+#
 # Every test checks behavior (page content, redirect target, or the data
 # left in the store), not just the HTTP status code.
 
-from datetime import date
+from datetime import date, timedelta
+from unittest.mock import patch
 
+import notification_service
 from app import store
 
 
@@ -256,3 +261,102 @@ def test_return_rental_page_unknown_rental_changes_nothing(client):
     assert response.status_code == 302
     assert store.rentals == {}
     assert store.equipment[equipment_id].available_units == 2
+
+
+# ============================================================
+# Part 2: notification tests (failure and non-trigger paths)
+# ============================================================
+# The endpoint calls send_notification through app.routes.rentals, so that is
+# the name patched here (patched where it is used, not in notification_service).
+
+def make_rental(client, due_in_days, email="sam@example.com", name="Kayak"):
+    """Check out one item for one renter and set the due date. Returns ids."""
+    equipment_id = add_equipment(client, name=name, units=2)
+    renter_id = add_renter(client, email=email)
+    client.post(
+        "/ui/rentals",
+        data={"equipment_id": str(equipment_id), "renter_id": str(renter_id)},
+    )
+    rental_id = max(store.rentals)
+    store.rentals[rental_id].due_date = date.today() + timedelta(days=due_in_days)
+    return rental_id, renter_id, equipment_id
+
+
+def test_reminder_reports_failed_notification(client, monkeypatch):
+    # STUB: the service always fails; the app must report it, not crash.
+    rental_id, _, _ = make_rental(client, due_in_days=1)
+    due_before = store.rentals[rental_id].due_date
+    monkeypatch.setattr(
+        "app.routes.rentals.send_notification",
+        lambda recipient, subject, message: False,
+    )
+
+    response = client.post(f"/rentals/{rental_id}/reminder")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"message": "Reminder processed", "notified": False}
+    assert store.rentals[rental_id].return_date is None
+    assert store.rentals[rental_id].due_date == due_before
+
+
+def test_reminder_not_sent_when_rental_not_due_soon(client):
+    # MOCK: due in 3 days is just outside the 2-day window (boundary).
+    rental_id, _, _ = make_rental(client, due_in_days=3)
+
+    with patch("app.routes.rentals.send_notification") as mock_send:
+        response = client.post(f"/rentals/{rental_id}/reminder")
+
+    assert response.status_code == 400
+    assert "Too early" in response.get_json()["error"]
+    mock_send.assert_not_called()
+
+
+def test_reminder_not_sent_when_renter_was_deleted(client):
+    rental_id, renter_id, _ = make_rental(client, due_in_days=1)
+    store.renters.pop(renter_id)
+
+    with patch("app.routes.rentals.send_notification") as mock_send:
+        response = client.post(f"/rentals/{rental_id}/reminder")
+
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "Renter or equipment not found"}
+    mock_send.assert_not_called()
+
+
+def test_reminder_not_sent_when_equipment_was_deleted(client):
+    rental_id, _, equipment_id = make_rental(client, due_in_days=1)
+    store.equipment.pop(equipment_id)
+
+    with patch("app.routes.rentals.send_notification") as mock_send:
+        response = client.post(f"/rentals/{rental_id}/reminder")
+
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "Renter or equipment not found"}
+    mock_send.assert_not_called()
+
+
+def test_reminder_to_invalid_email_is_reported_and_nothing_is_recorded(client):
+    # No test double: the real simulator rejects a recipient without "@".
+    rental_id, _, _ = make_rental(client, due_in_days=1, email="not-an-email")
+    notification_service.clear_notifications()
+
+    response = client.post(f"/rentals/{rental_id}/reminder")
+
+    assert response.status_code == 200
+    assert response.get_json()["notified"] is False
+    assert notification_service.get_notifications() == []
+    notification_service.clear_notifications()
+
+
+def test_reminder_reports_failure_when_service_is_unavailable(client, monkeypatch):
+    # STUB the outage switch inside the simulator; the real send path runs.
+    rental_id, _, _ = make_rental(client, due_in_days=1)
+    notification_service.clear_notifications()
+    monkeypatch.setattr(notification_service, "is_service_available", lambda: False)
+
+    response = client.post(f"/rentals/{rental_id}/reminder")
+
+    assert response.status_code == 200
+    assert response.get_json()["notified"] is False
+    assert notification_service.get_notifications() == []
+    notification_service.clear_notifications()
